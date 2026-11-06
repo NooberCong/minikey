@@ -100,6 +100,30 @@ impl Driver for Engine {
     }
 }
 
+/// A known upstream bug, fixed here: restoring a Telex word stops at a `[` or `]`
+/// that was typed as a letter, losing everything before it ("x[0" leaves "0").
+/// Only a run with a bracket can hit it, and it only ever leaves upstream with
+/// less text. The screens differ from then on, so the sequence ends there.
+fn upstream_lost_bracket_word(method: Method, keys: &[Key], theirs: &[u16], ours: &[u16]) -> bool {
+    method == Method::Telex && theirs.len() < ours.len() && bracket_in_word(keys)
+}
+
+/// Whether the word at the end of `keys` has a bracket in it. A space ends a
+/// word, unless a backspace right after it resumed that word.
+fn bracket_in_word(keys: &[Key]) -> bool {
+    let mut resumed = false;
+    for key in keys.iter().rev() {
+        match key {
+            Key::Char(b'[' | b']' | b'{' | b'}') => return true,
+            Key::Reset => return false,
+            Key::Space if !resumed => return false,
+            _ => {}
+        }
+        resumed = matches!(key, Key::Backspace);
+    }
+    false
+}
+
 /// Runs one sequence through both engines; returns the first divergence.
 fn compare(method: Method, keys: &[Key]) -> Option<String> {
     let mut theirs = <Upstream as Driver>::new(method);
@@ -109,6 +133,9 @@ fn compare(method: Method, keys: &[Key]) -> Option<String> {
         theirs.press(*key, &mut their_screen);
         ours.press(*key, &mut our_screen);
         if their_screen != our_screen {
+            if upstream_lost_bracket_word(method, &keys[..=i], &their_screen, &our_screen) {
+                return None;
+            }
             return Some(format!(
                 "{method:?} diverged at key {i} of {:?}\n  upstream: {:?}\n  minikey:  {:?}",
                 &keys[..=i],

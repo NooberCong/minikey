@@ -82,6 +82,10 @@ fn char_class(key: u8) -> CharClass {
     }
 }
 
+fn is_bracket(key: u8) -> bool {
+    matches!(key, b'[' | b']' | b'{' | b'}')
+}
+
 impl Method {
     fn action(self, key: u8) -> Action {
         match self {
@@ -441,10 +445,17 @@ impl Engine {
             return false;
         }
 
+        // Telex `[` and `]` look like word breaks in the keystroke log, but those
+        // that became ơ and ư are letters of this word: "x[0" must keep its "x[".
+        let mut bracket_letters = word.iter().filter(|e| is_bracket(e.key)).count();
         let mut keys_start = self.keys_current;
-        while keys_start > 0
-            && char_class(self.keys[keys_start as usize - 1]) != CharClass::WordBreak
-        {
+        while keys_start > 0 {
+            if char_class(self.keys[keys_start as usize - 1]) == CharClass::WordBreak {
+                if bracket_letters == 0 {
+                    break;
+                }
+                bracket_letters -= 1;
+            }
             keys_start -= 1;
         }
         let key_count = self.keys_current - keys_start + 1;

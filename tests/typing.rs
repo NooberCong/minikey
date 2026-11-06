@@ -426,3 +426,31 @@ fn very_long_runs_keep_working() {
     let long = "x".repeat(1000);
     assert_eq!(typed(Method::Telex, &format!("{long} as")), format!("{long} á"));
 }
+
+/// A bracket typed as ơ or ư is part of the word, so restoring the word must
+/// bring it back rather than treat it as where the word began.
+#[test]
+fn restoring_a_word_keeps_brackets_typed_as_letters() {
+    check(
+        Method::Telex,
+        &[
+            ("x[0]", "x[0]"),
+            ("b[1]", "b[1]"),
+            ("x]1", "x]1"),
+            ("x[y", "x[y"),
+            ("t[a", "t[a"),
+            ("x[a]", "x[a]"),
+            ("X{0}", "X{0}"),
+            ("foo x[0]", "foo x[0]"),
+            ("a-x[0]", "a-x[0]"),
+        ],
+    );
+}
+
+#[test]
+fn brackets_still_type_letters_and_break_words() {
+    check(
+        Method::Telex,
+        &[("t[", "tơ"), ("t]", "tư"), ("t[s", "tớ"), ("to[2", "to[2")],
+    );
+}
