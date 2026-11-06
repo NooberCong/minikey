@@ -16,9 +16,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK,
-    KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+    CallNextHookEx, GetForegroundWindow, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
 };
 
 use crate::inject::{self, is_held, Strategy, Target};
@@ -88,7 +88,12 @@ impl Typing {
             return Outcome::Pass;
         }
         self.chord = false;
-        if is_alt_or_win(vk16) || !self.vietnamese {
+        if is_alt_or_win(vk16) {
+            // These can move focus, and the keys typed next may beat the switch.
+            self.reset_word();
+            return Outcome::Pass;
+        }
+        if !self.vietnamese {
             return Outcome::Pass;
         }
 
@@ -101,7 +106,7 @@ impl Typing {
     }
 
     fn on_typing_key(&mut self, vk: u32, scan: u32) -> Outcome {
-        let strategy = self.target.refresh();
+        let strategy = self.follow_focus(unsafe { GetForegroundWindow() });
         if strategy == Strategy::Bypass || is_held(VK_CONTROL) || is_held(VK_MENU) || win_held() {
             self.engine.reset();
             return Outcome::Pass;
@@ -123,6 +128,16 @@ impl Typing {
             },
         };
         edit.map_or(Outcome::Pass, |edit| Outcome::Replace(edit, strategy))
+    }
+
+    /// Tracks the foreground window. The word being typed stays behind in the
+    /// old window, so an edit of it must never reach the new one.
+    fn follow_focus(&mut self, window: HWND) -> Strategy {
+        let (strategy, changed) = self.target.follow(window);
+        if changed {
+            self.engine.reset();
+        }
+        strategy
     }
 
     /// The printable ASCII character this key types, if any.
@@ -272,4 +287,53 @@ pub fn set_settings(settings: Settings) {
         typing.engine.set_method(settings.method);
         typing.sync_mouse_hook();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIRST: HWND = 1 as HWND;
+    const SECOND: HWND = 2 as HWND;
+
+    fn typing_in(window: HWND) -> Typing {
+        let mut typing = Typing::new();
+        typing.follow_focus(window);
+        typing.engine.key(b'c');
+        typing.engine.key(b'a');
+        typing
+    }
+
+    #[test]
+    fn staying_in_a_window_keeps_the_word() {
+        let mut typing = typing_in(FIRST);
+        typing.follow_focus(FIRST);
+        let edit = typing.engine.key(b's').expect("the tone edits the word");
+        assert_eq!(edit.backspaces, 1);
+    }
+
+    #[test]
+    fn a_new_window_never_receives_an_edit_of_the_old_word() {
+        let mut typing = typing_in(FIRST);
+        typing.follow_focus(SECOND);
+        assert!(!typing.engine.has_state());
+        assert!(typing.engine.key(b's').is_none());
+    }
+
+    #[test]
+    fn returning_to_a_window_starts_a_new_word() {
+        let mut typing = typing_in(FIRST);
+        typing.follow_focus(SECOND);
+        typing.follow_focus(FIRST);
+        assert!(!typing.engine.has_state());
+    }
+
+    #[test]
+    fn alt_and_win_end_the_word() {
+        for vk in [VK_LWIN, VK_RWIN, VK_MENU, VK_LMENU, VK_RMENU] {
+            let mut typing = typing_in(FIRST);
+            assert!(matches!(typing.on_key(u32::from(vk), 0, true), Outcome::Pass));
+            assert!(!typing.engine.has_state());
+        }
+    }
 }

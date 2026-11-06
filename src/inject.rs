@@ -23,7 +23,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK, VK_LEFT, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId,
+    GetClassNameW, GetWindowThreadProcessId,
 };
 
 /// Marks our own synthesized keys so the hook can ignore them.
@@ -83,16 +83,17 @@ impl Target {
         Self { window: null_mut(), thread: 0, strategy: Strategy::Select }
     }
 
-    /// Follows the foreground window and returns its strategy.
-    pub fn refresh(&mut self) -> Strategy {
-        let window = unsafe { GetForegroundWindow() };
-        if window != self.window {
+    /// Follows the foreground window. Returns its strategy, and whether it is a
+    /// different window from last time.
+    pub fn follow(&mut self, window: HWND) -> (Strategy, bool) {
+        let changed = window != self.window;
+        if changed {
             self.window = window;
             let mut process = 0;
             self.thread = unsafe { GetWindowThreadProcessId(window, &mut process) };
             self.strategy = strategy_for(window, process);
         }
-        self.strategy
+        (self.strategy, changed)
     }
 
     pub fn layout(&self) -> HKL {
