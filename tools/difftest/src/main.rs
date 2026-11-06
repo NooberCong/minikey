@@ -100,21 +100,27 @@ impl Driver for Engine {
     }
 }
 
-/// A known upstream bug, fixed here: restoring a Telex word stops at a `[` or `]`
-/// that was typed as a letter, losing everything before it ("x[0" leaves "0").
-/// Only a run with a bracket can hit it, and it only ever leaves upstream with
-/// less text. The screens differ from then on, so the sequence ends there.
-fn upstream_lost_bracket_word(method: Method, keys: &[Key], theirs: &[u16], ours: &[u16]) -> bool {
-    method == Method::Telex && theirs.len() < ours.len() && bracket_in_word(keys)
+/// Two known upstream bugs, both fixed here, and both in restoring a word from
+/// its keystrokes. Once one has struck the screens differ, so the sequence ends.
+fn upstream_restored_wrongly(method: Method, keys: &[Key], theirs: &[u16], ours: &[u16]) -> bool {
+    // A key that went into a deleted letter stays in upstream's log: "ax<we"
+    // gives "awe". `tests/typing.rs` checks this behaviour without upstream.
+    let backspaced = word_contains(keys, |key| matches!(key, Key::Backspace));
+    // Restoring stops at a `[` or `]` typed as a letter, losing everything
+    // before it: "x[0" leaves "0".
+    let bracket = word_contains(keys, |key| matches!(key, Key::Char(b'[' | b']' | b'{' | b'}')));
+    backspaced || (method == Method::Telex && bracket && theirs.len() < ours.len())
 }
 
-/// Whether the word at the end of `keys` has a bracket in it. A space ends a
+/// Whether any key of the word at the end of `keys` matches. A space ends a
 /// word, unless a backspace right after it resumed that word.
-fn bracket_in_word(keys: &[Key]) -> bool {
+fn word_contains(keys: &[Key], matches: impl Fn(&Key) -> bool) -> bool {
     let mut resumed = false;
     for key in keys.iter().rev() {
+        if matches(key) {
+            return true;
+        }
         match key {
-            Key::Char(b'[' | b']' | b'{' | b'}') => return true,
             Key::Reset => return false,
             Key::Space if !resumed => return false,
             _ => {}
@@ -133,7 +139,7 @@ fn compare(method: Method, keys: &[Key]) -> Option<String> {
         theirs.press(*key, &mut their_screen);
         ours.press(*key, &mut our_screen);
         if their_screen != our_screen {
-            if upstream_lost_bracket_word(method, &keys[..=i], &their_screen, &our_screen) {
+            if upstream_restored_wrongly(method, &keys[..=i], &their_screen, &our_screen) {
                 return None;
             }
             return Some(format!(

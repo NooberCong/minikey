@@ -454,3 +454,56 @@ fn brackets_still_type_letters_and_break_words() {
         &[("t[", "tơ"), ("t]", "tư"), ("t[s", "tớ"), ("to[2", "to[2")],
     );
 }
+
+/// Deleting a letter deletes every key that went into it, so those keys cannot
+/// come back when a word is restored later.
+#[test]
+fn restoring_a_word_forgets_deleted_letters() {
+    check(
+        Method::Telex,
+        &[
+            ("ax<we", "we"),
+            ("as<we", "we"),
+            ("aa<we", "we"),
+            ("w[f<e", "we"),
+            ("]x<[a", "[a"),
+            ("tas<we", "twe"),
+        ],
+    );
+}
+
+/// A mark belongs to the letter it landed on, not to the letter typed before it.
+#[test]
+fn restoring_a_word_keeps_marks_on_surviving_letters() {
+    check(Method::Telex, &[("tans<", "tá"), ("tans<k", "task")]);
+}
+
+/// Typing a letter and deleting it must be the same as never having typed it,
+/// whatever comes next. Upstream fails this, so difftest cannot check it.
+///
+/// Not covered: keys that undo an earlier mark, as the `aa` of "duaaa" does.
+/// Deleting the letter they made leaves the undone mark's key behind.
+#[test]
+fn a_deleted_letter_leaves_no_trace() {
+    const KEYS: &[u8] = b"aeoudntsfxw[";
+    let word = |digits: usize| -> String {
+        (0..3).map(|i| KEYS[digits / KEYS.len().pow(i) % KEYS.len()] as char).collect()
+    };
+    for prefix in (0..KEYS.len().pow(3)).map(word) {
+        for letter in ["n", "t", "as", "ax", "aa", "ee", "oof"] {
+            let with_letter = typed(Method::Telex, &format!("{prefix}{letter}"));
+            let without = typed(Method::Telex, &prefix);
+            // Only where the keys made their own letter, at the end of the word.
+            if with_letter != without + &typed(Method::Telex, letter) {
+                continue;
+            }
+            for next in ["k", "we", "a0"] {
+                assert_eq!(
+                    typed(Method::Telex, &format!("{prefix}{letter}<{next}")),
+                    typed(Method::Telex, &format!("{prefix}{next}")),
+                    "deleting {letter:?} after {prefix:?}, then typing {next:?}",
+                );
+            }
+        }
+    }
+}

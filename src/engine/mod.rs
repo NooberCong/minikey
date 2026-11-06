@@ -82,10 +82,6 @@ fn char_class(key: u8) -> CharClass {
     }
 }
 
-fn is_bracket(key: u8) -> bool {
-    matches!(key, b'[' | b']' | b'{' | b'}')
-}
-
 impl Method {
     fn action(self, key: u8) -> Action {
         match self {
@@ -177,6 +173,15 @@ const BLANK: Entry = Entry {
     key: 0,
 };
 
+/// A raw keystroke, kept for restoring foreign words.
+#[derive(Clone, Copy)]
+struct Stroke {
+    key: u8,
+    /// Index of the entry this key went into. A mark belongs to the letter it
+    /// landed on, so a key lives and dies with that letter.
+    entry: i32,
+}
+
 /// Word state to return to if the user backspaces over the space that ended it.
 #[derive(Clone, Copy)]
 struct Saved {
@@ -196,8 +201,8 @@ pub struct Engine {
     backspaces: usize,
     /// The word stopped being Vietnamese but `dd` still applies, as in "đc".
     single_mode: bool,
-    /// Raw keystrokes of the current run, for restoring foreign words.
-    keys: [u8; CAPACITY],
+    /// Raw keystrokes of the current run, in the order typed.
+    keys: [Stroke; CAPACITY],
     keys_current: i32,
     saved: Option<Saved>,
 }
@@ -211,7 +216,7 @@ impl Engine {
             change_pos: 0,
             backspaces: 0,
             single_mode: false,
-            keys: [0; CAPACITY],
+            keys: [Stroke { key: 0, entry: -1 }; CAPACITY],
             keys_current: -1,
             saved: None,
         }
@@ -260,6 +265,7 @@ impl Engine {
         }
         self.backspaces = 0;
         self.change_pos = self.current + 1;
+        let previous = self.current;
 
         let event = self.classify(key);
         let changed = self.dispatch(event);
@@ -273,7 +279,9 @@ impl Engine {
         }
         if self.current >= 0 {
             self.keys_current += 1;
-            self.keys[self.keys_current as usize] = key;
+            // A key that added no entry marked the earliest one it changed.
+            let entry = if self.current > previous { self.current } else { self.change_pos };
+            self.keys[self.keys_current as usize] = Stroke { key, entry: entry.min(self.current) };
         }
 
         if changed || self.restore_foreign_word() {
@@ -388,19 +396,18 @@ impl Engine {
         (self.backspaces > 0 || len > 0).then_some(Edit { backspaces: self.backspaces, units, len })
     }
 
-    /// Removes the last entry and its keystroke.
+    /// Removes the last entry and every keystroke that went into it.
     fn drop_last(&mut self) {
-        self.current -= 1;
-        if self.keys_current >= 0 {
-            self.keys_current -= 1;
-        }
-        if self.current >= 0 && self.at(self.current).form == Form::Empty {
-            while self.keys_current >= 0
-                && char_class(self.keys[self.keys_current as usize]) != CharClass::WordBreak
-            {
-                self.keys_current -= 1;
+        let mut kept = 0;
+        for index in 0..=self.keys_current as isize {
+            let stroke = self.keys[index as usize];
+            if stroke.entry != self.current {
+                self.keys[kept] = stroke;
+                kept += 1;
             }
         }
+        self.keys_current = kept as i32 - 1;
+        self.current -= 1;
     }
 
     /// After `dd` revived a foreign word, parses the letter just typed as the
@@ -445,17 +452,8 @@ impl Engine {
             return false;
         }
 
-        // Telex `[` and `]` look like word breaks in the keystroke log, but those
-        // that became ơ and ư are letters of this word: "x[0" must keep its "x[".
-        let mut bracket_letters = word.iter().filter(|e| is_bracket(e.key)).count();
         let mut keys_start = self.keys_current;
-        while keys_start > 0 {
-            if char_class(self.keys[keys_start as usize - 1]) == CharClass::WordBreak {
-                if bracket_letters == 0 {
-                    break;
-                }
-                bracket_letters -= 1;
-            }
+        while keys_start > 0 && self.keys[keys_start as usize - 1].entry >= word_start {
             keys_start -= 1;
         }
         let key_count = self.keys_current - keys_start + 1;
@@ -468,7 +466,9 @@ impl Engine {
         self.current = word_start - 1;
         for i in 0..key_count {
             self.current += 1;
-            let key = self.keys[(keys_start + i) as usize];
+            let stroke = &mut self.keys[(keys_start + i) as usize];
+            stroke.entry = self.current;
+            let key = stroke.key;
             *self.at_mut(self.current) = Entry { form: Form::Foreign, key, ..BLANK };
         }
         true
