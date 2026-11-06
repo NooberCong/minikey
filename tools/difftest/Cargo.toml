@@ -1,0 +1,18 @@
+# Differential test: replays key sequences through the upstream VnKey engine
+# and through minikey, and fails on any difference in the text on screen.
+[package]
+name = "difftest"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+minikey = { path = "../.." }
+vnkey-engine = { git = "https://github.com/marixdev/vnkey", rev = "b75cdc0f5cbee954364212cfceb85f788d84809a" }
+
+[profile.release]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[workspace]
